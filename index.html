@@ -85,6 +85,7 @@ th.sortable{cursor:pointer}th.sortable:hover{color:var(--text)}th .sa{font-size:
 <div class="toolbar-actions">
 <div class="dark-toggle" id="darkToggle" title="Dark mode"><div class="knob">☀</div></div>
 <button class="btn-silver" onclick="exportDB()">📥 Export</button>
+<button class="btn-silver" onclick="exportPDF()">📄 PDF</button>
 <button class="btn-silver" onclick="document.getElementById('importInput').click()">📤 Import</button>
 <input type="file" id="importInput" accept=".json" onchange="importDB(event)">
 <button class="btn-blue" onclick="openModal('vehicle')">➕ Vehicle</button>
@@ -122,6 +123,71 @@ document.getElementById('darkToggle').addEventListener('click',togDark);initDark
 let wC=0,wT=null;document.getElementById('wormLogo').addEventListener('click',()=>{wC++;clearTimeout(wT);wT=setTimeout(()=>{wC=0;},1500);if(wC>=5){wC=0;const w=['🐛','🪱'];toast('🐛 WORM RAIN! 🪱');for(let i=0;i<60;i++){setTimeout(()=>{const el=document.createElement('div');el.className='worm-rain-particle'+(Math.random()>.5?' wiggle':'');el.textContent=w[Math.floor(Math.random()*w.length)];el.style.left=Math.random()*100+'vw';el.style.fontSize=(20+Math.random()*24)+'px';const d=2+Math.random()*3;el.style.animationDuration=d+'s';document.body.appendChild(el);setTimeout(()=>el.remove(),(d+.5)*1000);},i*50);}}});
 
 function exportDB(){const fn=`garageworm-${new Date().toISOString().slice(0,10)}.json`;const b=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=fn;a.click();URL.revokeObjectURL(a.href);toast('Exported as '+fn);}
+
+async function exportPDF(){
+  const veh=db.vehicles.find(v=>v.id===activeVId);
+  if(!veh)return toast('Select a vehicle first');
+  const recs=db.records.filter(r=>r.vehicleId===activeVId).sort((a,b)=>a.date.localeCompare(b.date));
+  if(!recs.length)return toast('No records to export');
+  toast('Generating PDF...');
+  // Dynamic load jsPDF if not present
+  if(!window.jspdf){
+    try{
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js');
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js');
+    }catch(e){return toast('Failed to load PDF library — open this file in your browser directly');}
+  }
+  if(!window.jspdf){return toast('PDF library unavailable — download & open in browser');}
+  await new Promise(r=>setTimeout(r,50));
+  const{jsPDF}=window.jspdf;
+  const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
+  const pw=doc.internal.pageSize.getWidth(),ph=doc.internal.pageSize.getHeight();
+  const ml=14,mr=14,mt=14;
+  let y=mt;
+  doc.setFillColor(26,109,212);doc.rect(0,0,pw,32,'F');
+  doc.setFillColor(20,96,184);doc.rect(0,16,pw,16,'F');
+  doc.setTextColor(255,255,255);doc.setFontSize(22);doc.setFont('helvetica','bold');
+  doc.text('Garage Worm',ml,14);
+  doc.setFontSize(10);doc.setFont('helvetica','normal');
+  doc.text('Service History Report',ml,22);
+  doc.setFontSize(9);doc.text(new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}),pw-mr,22,{align:'right'});
+  y=38;
+  doc.setTextColor(40,40,50);doc.setFontSize(16);doc.setFont('helvetica','bold');
+  doc.text(`${veh.year} ${veh.make} ${veh.model}${veh.trim?' '+veh.trim:''}`,ml,y);y+=7;
+  doc.setFontSize(10);doc.setFont('helvetica','normal');doc.setTextColor(90,99,112);
+  const det=[];if(veh.engine)det.push('Engine: '+veh.engine);det.push('Odometer: '+veh.mileage.toLocaleString()+' mi');if(veh.notes)det.push(veh.notes);
+  doc.text(det.join('  |  '),ml,y);y+=4;
+  const totalCost=recs.reduce((s,r)=>s+(r.cost||0),0);
+  doc.text(`${recs.length} record${recs.length!==1?'s':''}  |  Total: $${totalCost.toLocaleString('en-US',{minimumFractionDigits:2})}`,ml,y+4);y+=12;
+  doc.setDrawColor(160,168,180);doc.setLineWidth(0.4);doc.line(ml,y,pw-mr,y);y+=6;
+  doc.autoTable({startY:y,margin:{left:ml,right:mr},
+    head:[['Date','Category','Service','Mileage','Cost','Notes']],
+    body:recs.map(r=>[new Date(r.date+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),(catL[r.category]||r.category).toUpperCase(),r.service,r.mileage?r.mileage.toLocaleString()+' mi':'—','$'+(r.cost||0).toFixed(2),r.notes||'—']),
+    styles:{font:'helvetica',fontSize:8,cellPadding:2.5,lineColor:[200,205,215],lineWidth:0.2},
+    headStyles:{fillColor:[26,109,212],textColor:255,fontStyle:'bold',fontSize:8},
+    alternateRowStyles:{fillColor:[243,245,248]},
+    columnStyles:{0:{cellWidth:24},1:{cellWidth:18},2:{cellWidth:45},3:{cellWidth:22},4:{cellWidth:18},5:{cellWidth:38}},
+    didDrawPage:function(){doc.setFontSize(7);doc.setTextColor(150);doc.text('Garage Worm — '+new Date().toISOString().slice(0,10),ml,ph-6);doc.text('Page '+doc.getNumberOfPages(),pw-mr,ph-6,{align:'right'});}
+  });
+  y=doc.lastAutoTable.finalY+8;
+  const rwi=recs.filter(r=>r.images&&r.images.length);
+  if(rwi.length){for(const r of rwi){
+    if(y>ph-60){doc.addPage();y=mt;}
+    doc.setFontSize(10);doc.setFont('helvetica','bold');doc.setTextColor(40,40,50);
+    doc.text(`${new Date(r.date+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} — ${r.service}`,ml,y);y+=5;
+    doc.setDrawColor(200,205,215);doc.setLineWidth(0.2);doc.line(ml,y,pw-mr,y);y+=4;
+    let xP=ml;const iW=50,iH=38,gap=4,mpr=Math.floor((pw-ml-mr+gap)/(iW+gap));let col=0;
+    for(const img of r.images){
+      if(y+iH>ph-15){doc.addPage();y=mt;xP=ml;col=0;}
+      try{doc.addImage(img,img.startsWith('data:image/png')?'PNG':'JPEG',xP,y,iW,iH);}
+      catch(e){doc.setFillColor(240,240,245);doc.rect(xP,y,iW,iH,'F');doc.setFontSize(7);doc.setTextColor(150);doc.text('Image error',xP+12,y+20);}
+      col++;if(col>=mpr){col=0;xP=ml;y+=iH+gap;}else xP+=iW+gap;
+    }if(col>0)y+=iH+gap;y+=4;
+  }}
+  const fn=`garageworm-${veh.year}-${veh.make}-${veh.model}-${new Date().toISOString().slice(0,10)}.pdf`;
+  doc.save(fn);toast('PDF saved!');
+}
+function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 function importDB(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=function(ev){try{const imp=JSON.parse(ev.target.result);if(!imp.vehicles||!imp.records)throw 0;if(!imp.consumables)imp.consumables=[];db=imp;dbSource=f.name;save();updSB();activeVId=db.vehicles.length?db.vehicles[0].id:null;render();toast('Loaded from '+f.name);}catch(err){toast('Invalid file!');}};r.readAsText(f);e.target.value='';}
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
